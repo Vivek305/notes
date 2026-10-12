@@ -1,96 +1,148 @@
-# T1.2 and W0-2 Guided T=0.1 Readout
+# Tier 1 Wave-2 training completion — advisor review
 
-**Date:** 2026-10-11
-**Status:** completed aggregate readout; no patient text or row-level output is included.
+**Date:** 2026-10-12  
+**Scope:** T1.3 chest-only schema-v2 student, T1.4 joint schema-v2 student (seeds 17 and 23),
+and T1.5 unguided evaluation.  
+**Data handling:** Aggregate-only. No report text, report IDs, prompts, generations, or row-level predictions are included.
 
-## Artifacts
+## Executive readout
 
-| Artifact | Location | Result |
-|---|---|---|
-| T1.2 aggregate | `reports/eval/t1_2_teacher_v2.{json,md}` | Four-shard merge completed in the H1004 debug container. |
-| T1.2 target table | `data/predictions/t1_2_teacher_v2/teacher_targets.parquet` | 72,734 deterministic v2 no-trace student targets. |
-| W0-2 guided T=0.1 | `reports/eval/w0_2_guided_t01_schema_v2.{json,md}` | Completed on the nested 1,000-report cohort. |
-| Guided self-agreement | `reports/eval/w0_2_guided_schema_v2_self_agreement.{json,md}` | Compares frozen T1.2 T=0 output with W0-2 T=0.1. |
+All three planned training runs completed and wrote adapters plus `run.json` provenance under
+`data/runs/`. They used the prepared no-trace schema-v2 corpora and the pre-registered
+two-epoch, effective-batch-64 recipe. T1.5 job 48753 also completed: it generated and
+aggregate-scored every planned adapter-by-scope pair with unguided decoding.
 
-## T1.2 contract and merge verification
+| Job | Final job ID | Result | Seed | Corpus rows | Steps | Runtime | s/step | Peak training VRAM |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
+| T1.3 chest-only v2 | 48722 | completed | 17 | 44,808 | 1,401 | 9h 32m 40s | 24.53 | 58.10 GiB |
+| T1.4 joint v2 | 48725 | completed | 17 | 54,182 | 1,694 | 11h 47m 56s | 25.07 | 58.10 GiB |
+| T1.4 joint v2 | 48726 | completed | 23 | 54,182 | 1,694 | 11h 52m 08s | 25.22 | 58.06 GiB |
 
-- Teacher: `google/gemma-4-31B-it`; schema v2; reasoning trace present for generation; guided JSON; temperature 0; cap 2,048; model length 10,240; GPU reservation target 0.97; prefix caching enabled.
-- Cohort: 72,734 reports with manifest SHA-256 `a22a48f340bced48cd974cde2b6e279b030cd3b05113445050ddac3925e61f14`.
-- The four SHA-256 report-ID shards contained 18,325, 18,158, 18,095, and 18,156 reports, respectively.
-- Merge invariants passed: every manifest report appeared exactly once, all four shards were present, no duplicate report IDs occurred, and invalid or at-cap rows were retained rather than regenerated.
-- The materialized student targets are deterministic schema-v2 serializations with no reasoning trace.
+The completed runs are 4.2%–6.9% faster than the 3.45k reference rate of 26.33 s/step.
+The 58.1-GiB peak is the recorded training working set, below the 80-GiB H100 capacity.
 
-## T1.2 aggregate generation results
+On the primary schema-v2 chest comparisons, T1.3 reached head-label fidelity to the v3 teacher
+of 0.9568 (internal) and 0.9540 (production). T1.4 seed 17 reached 0.9566 and 0.9546; seed 23
+reached 0.9581 and 0.9542. All unguided JSON-validity values exceeded the 0.99 fallback
+threshold, so guided decoding was not used. The two joint seeds remain within 0.0013 of T1.3 on
+chest M1, well inside the pre-registered 0.01 joint-training tolerance.
 
-| Measure | Value |
-|---|---:|
-| Reports | 72,734 |
-| JSON validity | 99.615% |
-| Rows at cap | 280 (0.385%) |
-| Invalid rows not at cap | 0 |
-| Truncation repairs | 1 |
-| Mean findings/report | 3.6763 |
-| Mean explicit absent findings/report | 1.6591 |
-| Location populated | 52.981% |
-| Severity populated | 32.106% |
-| Probability populated | 100.000% |
-| Output tokens, mean / p95 / p99 / max | 358.2 / 694 / 955 / 2,048 |
+## Training contract and provenance
 
-### Role-level results
+| Run | Corpus SHA-256 | Config SHA-256 | Source SHA-256 | Target | Max sequence | Effective batch | Warmup |
+|---|---|---|---|---|---:|---:|---:|
+| T1.3 | `e2cdf9246c0d…b318dade` | `d73e2dd9e948…8eaf7a9c` | `944e10bdb772…540bddce` | `target_text_no_trace` | 3,076 | 64 | 42 steps |
+| T1.4 s17 | `596cea1f8a39…c7624b95` | `586856345472…c51c053` | `944e10bdb772…540bddce` | `target_text_no_trace` | 3,076 | 64 | 51 steps |
+| T1.4 s23 | `596cea1f8a39…c7624b95` | `1ad851a4ebd…ca222d07` | `944e10bdb772…540bddce` | `target_text_no_trace` | 3,076 | 64 | 51 steps |
 
-| Role | Reports | JSON validity | At cap | Findings/report | Tokens mean / p95 |
-|---|---:|---:|---:|---:|---:|
-| anatomy_abdomen | 523 | 100.000% | 0 | 3.0038 | 311.79 / 510 |
-| anatomy_extremity | 7,019 | 99.843% | 11 | 2.2559 | 267.09 / 486 |
-| anatomy_ribs | 456 | 100.000% | 0 | 2.4386 | 264.96 / 507 |
-| anatomy_spine | 5,093 | 99.686% | 16 | 3.4388 | 366.62 / 635 |
-| chest_test_internal | 3,248 | 99.661% | 11 | 2.5317 | 273.48 / 504 |
-| chest_test_prod | 11,395 | 99.561% | 50 | 4.2193 | 393.24 / 731 |
-| chest_train | 45,000 | 99.573% | 192 | 3.8902 | 370.18 / 718 |
+Each completed run logged 343 LoRA target modules across 10 module kinds, 155.5M trainable
+parameters out of 8,096.6M, and `resumed_from_step: 0`. The T1.4 seeds share the exact joint
+corpus hash as required.
 
-### Per-shard execution and telemetry
+## Pre-launch corpus gates carried into these runs
 
-| Shard | Reports | Wall time | Reports/s | At cap | Peak GPU reservation |
-|---|---:|---:|---:|---:|---:|
-| 0 | 18,325 | 12,750.8 s | 1.437 | 75 | 80,295 MiB |
-| 1 | 18,158 | 12,334.6 s | 1.472 | 68 | 80,295 MiB |
-| 2 | 18,095 | 12,402.4 s | 1.459 | 72 | 80,295 MiB |
-| 3 | 18,156 | 12,428.0 s | 1.461 | 65 | 80,295 MiB |
+- **D54** records the Wave-2 training and scoring contract.
+- T1.3 retained 44,808 valid, uncensored, unrepaired chest targets from the frozen 45k
+  P-split-B source. The prompt-byte identity and schema-v2 no-trace round-trip checks passed.
+- T1.4 retained that exact T1.3 chest component and added audited spine/extremity rows for
+  54,182 total rows. The leakage audit removed 137 L1 and 104 L3 prohibited overlaps;
+  L2 cross-anatomy test overlap was zero for both directions.
+- The measured maximum prompt-plus-target sequence length was 3,076, below the 4,700-token
+  training wall.
+- The remote preflight passed corpus integrity, tokenizer contract, CUDA, training stack, and
+  disk headroom before the launches.
 
-The total of per-shard wall time is 49,915.8 s. Every shard telemetry capture reports 14,672 KV-cache tokens, estimated maximum concurrency 1.43, and zero preemption warnings. The 80,295 MiB figure is the vLLM process reservation sampled by `nvidia-smi`, not workload working-set memory. This vLLM build did not emit prefix-cache hit rate or KV-cache usage percentage.
+## Operational note
 
-## Fidelity to the v3 teacher reference
+The first T1.4 seed-17 and seed-23 submissions (jobs 48723 and 48724) failed before training
+with CUDA error 803, an unsupported display-driver/CUDA-driver combination. Restore submissions
+48725 and 48726 started from no checkpoint and completed; this is reflected by
+`resumed_from_step: 0` in both final run records. T1.3 completed on its first submission.
 
-On the 59,643 chest reports, asserted-label agreement between v1 and v2, treating invalid v2 output as an empty label set, was:
+## T1.5 unguided evaluation — completed
 
-| Scope | Micro F1 |
-|---|---:|
-| All chest labels | 0.953865 |
-| Head labels | 0.956568 |
+**Execution.** Job 48753, `cxr-nt-t1-5-schema-v2-evaluation`, completed on 2026-10-12. The
+terminal log records all six scopes generated and scored for each adapter; the VLLM `SIGTERM` /
+`start mode=abort` messages occur after each adapter's completed requests and are normal engine
+teardown. No job abort occurred. All 18 prediction sets had zero missing rows. Scoring used
+temperature 0, unguided decoding, and a 2,048-token output cap. M12 was computed with medspaCy.
 
-This is a v1-to-v2 reference comparison and is useful for tracking fidelity to the v3 teacher; it is not a clinical-performance estimate.
+**Denominators.** The primary v2 chest populations contain 3,237 internal and 11,345 production
+reports. The 11 internal and 50 production invalid teacher rows were excluded before the frozen
+scoring reference files were written; each scored reference file therefore contains zero invalid
+rows. Anatomy populations are 466 abdomen, 1,333 extremity, 428 ribs, and 967 spine reports.
+All four exclude the required chest-training patient overlap; spine and extremity additionally
+use their frozen anatomy test assignments.
 
-## W0-2 guided T=0.1 control
+### Primary v2 results
 
-The completed control used the precommitted 1,000-report cohort nested in T1.2 (`w0_2_trace`), with the same traced, guided schema-v2 contract as T1.2 except temperature 0.1.
+M5 is reported as **Absent / asserted** evidence exact-match rate. Anatomy M1 is shown as N/A:
+the scorer currently obtains its head-label list from the immutable chest taxonomy, which has no
+labels in common with runtime anatomy taxonomies; its emitted `0.0000` is a denominator artifact,
+not a measure of anatomy fidelity to the v3 teacher. M2–M6 and M12 use each runtime taxonomy.
 
-| Measure | Value |
-|---|---:|
-| Reports | 1,000 |
-| Wall time / reports per second | 616.6 s / 1.622 |
-| JSON validity | 99.200% |
-| Rows at cap | 8 (0.800%) |
-| Invalid rows not at cap | 0 |
-| Mean output tokens / p95 / max | 382.6 / 734 / 2,048 |
-| Asserted-label micro F1 vs v1, invalid as empty | 0.955798 |
-| Asserted-label micro F1 vs v1, valid rows only | 0.960208 |
-| Peak GPU reservation | 80,299 MiB |
-| Preemption warnings | 0 |
+| Adapter | Scope | N | M1 | M2 | M3 | M4 | M5 absent / asserted | M6 | M12 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| T1.3 | abdomen | 466 | N/A | 0.4389 | 0.9728 | 0.8997 | 0.9458 / 0.9792 | 1.0000 | 0.0728 |
+| T1.3 | extremity | 1,333 | N/A | 0.3854 | 0.9817 | 0.9777 | 0.9100 / 0.9822 | 0.9940 | 0.1095 |
+| T1.3 | ribs | 428 | N/A | 0.3748 | 0.9494 | 0.9642 | 0.9491 / 0.9883 | 0.9977 | 0.0760 |
+| T1.3 | spine | 967 | N/A | 0.4217 | 0.9778 | 0.9227 | 0.9643 / 0.9899 | 0.9959 | 0.0608 |
+| T1.3 | chest internal | 3,237 | 0.9568 | 0.7948 | 0.9921 | 0.9952 | 0.9566 / 0.9923 | 1.0000 | 0.0026 |
+| T1.3 | chest production | 11,345 | 0.9540 | 0.7903 | 0.9966 | 0.9950 | 0.9609 / 0.9328 | 0.9997 | 0.0113 |
+| T1.4 s17 | abdomen | 466 | N/A | 0.5357 | 0.9891 | 0.8721 | 0.8967 / 0.9931 | 1.0000 | 0.0675 |
+| T1.4 s17 | extremity | 1,333 | N/A | 0.5779 | 0.9897 | 0.9916 | 0.9318 / 0.9746 | 1.0000 | 0.1123 |
+| T1.4 s17 | ribs | 428 | N/A | 0.6020 | 0.9831 | 0.9863 | 0.9547 / 0.9934 | 1.0000 | 0.0987 |
+| T1.4 s17 | spine | 967 | N/A | 0.6583 | 0.9944 | 0.9825 | 0.9407 / 0.9427 | 1.0000 | 0.0664 |
+| T1.4 s17 | chest internal | 3,237 | 0.9566 | 0.7686 | 0.9908 | 0.9934 | 0.9529 / 0.9902 | 1.0000 | 0.0026 |
+| T1.4 s17 | chest production | 11,345 | 0.9546 | 0.7941 | 0.9965 | 0.9950 | 0.9626 / 0.9285 | 0.9999 | 0.0112 |
+| T1.4 s23 | abdomen | 466 | N/A | 0.6103 | 0.9810 | 0.8884 | 0.9458 / 0.9890 | 1.0000 | 0.0697 |
+| T1.4 s23 | extremity | 1,333 | N/A | 0.4968 | 0.9932 | 0.9911 | 0.9319 / 0.9755 | 1.0000 | 0.1118 |
+| T1.4 s23 | ribs | 428 | N/A | 0.5920 | 0.9789 | 0.9764 | 0.9546 / 0.9861 | 1.0000 | 0.1042 |
+| T1.4 s23 | spine | 967 | N/A | 0.6915 | 0.9956 | 0.9610 | 0.9492 / 0.9443 | 1.0000 | 0.0683 |
+| T1.4 s23 | chest internal | 3,237 | 0.9581 | 0.8038 | 0.9928 | 0.9946 | 0.9556 / 0.9916 | 0.9997 | 0.0033 |
+| T1.4 s23 | chest production | 11,345 | 0.9542 | 0.7572 | 0.9965 | 0.9957 | 0.9609 / 0.9333 | 0.9998 | 0.0111 |
 
-The frozen T1.2 T=0 outputs and the new T=0.1 outputs have 991 valid pairs and asserted-label micro F1 0.984606. This is the guided self-agreement reference for the later T1.3 temperature comparison.
+### Chest diagnostics and comparisons
 
-## Immediate follow-through
+The location and severity diagnostics below are exact agreement with the v2 teacher followed by
+the rate that emitted text appears verbatim in the source. PMAD is the mean absolute probability
+difference. Full status-confusion matrices remain in the aggregate-only T1.5 JSON artifacts.
 
-1. Preserve the T1.2 aggregate and target table as the frozen corpus reference for dependent work.
-2. Use the recorded guided self-agreement result when interpreting the T1.3 temperature experiment.
-3. Continue the handoff sequence with T1.3 and T1.4, which can now consume the completed T1.2 corpus and aggregate diagnostics.
+| Adapter | Scope | Location exact / source | Severity exact / source | PMAD |
+|---|---|---:|---:|---:|
+| T1.3 | internal | 0.8066 / 1.0000 | 0.7860 / 1.0000 | 0.0015 |
+| T1.3 | production | 0.8456 / 0.9748 | 0.7667 / 0.9906 | 0.0058 |
+| T1.4 s17 | internal | 0.8132 / 0.9993 | 0.7889 / 0.9994 | 0.0014 |
+| T1.4 s17 | production | 0.8458 / 0.9744 | 0.7658 / 0.9905 | 0.0060 |
+| T1.4 s23 | internal | 0.8225 / 1.0000 | 0.7783 / 1.0000 | 0.0012 |
+| T1.4 s23 | production | 0.8464 / 0.9747 | 0.7680 / 0.9904 | 0.0060 |
+
+The retained-denominator 3.45k v1 comparison is descriptive only: it uses the v1 teacher and
+the same valid chest rows, whereas the primary results above use the v2 teacher. It measured M1
+of 0.9657 internal and 0.9605 production, M2 of 0.8534 and 0.8857, M3 of 0.9941 and 0.9979, M4
+of 0.9941 and 0.9938, M5 of 0.9972 and 0.9823, and M6 of 1.0000 and 0.9999, respectively. T1.3's
+descriptive M1 difference from that v1 reference is -0.0089 internal and -0.0065 production;
+both are within the 0.01 schema-cost guide. A same-scorer guided-v2 self-agreement reference is
+not produced by job 48753 and should be included beside this comparison before making a final
+schema decision.
+
+### Gate reading
+
+- **Unguided-format gate: passed.** The minimum M6 is 0.9940, so the pre-committed guided-decoding
+  fallback did not trigger.
+- **Joint-training chest gate: passed for both seeds.** Relative to T1.3, the T1.4 M1 changes are
+  -0.0002 / +0.0006 (s17, internal / production) and +0.0013 / +0.0002 (s23), all within 0.01.
+- **Anatomy reading: promising but incomplete.** T1.4 generally improves M2 over T1.3, especially
+  on spine and ribs, but M1 cannot be interpreted until the scorer is given a runtime-anatomy
+  head-label definition or that column is formally removed for anatomy. M12 ranges from 0.0608 to
+  0.1123 across anatomy, materially above chest (0.0026–0.0113), and should be reviewed alongside
+  the runtime taxonomy and evidence policy before any release claim.
+- **Evidence reading: requires advisor review.** Asserted evidence fidelity is high on internal
+  chest (0.9902–0.9923) but 0.9285–0.9333 on production chest; location and severity source rates
+  are near-extractive, while exact teacher agreement is lower. This is a schema-v2 evidence-format
+  question, not evidence of clinical correctness.
+
+Aggregate sources are `reports/eval/t1_5_t1_{3,4_s17,4_s23}_*.{json,md}` and
+`reports/eval/t1_5_3_45k_v1_matched_chest_test_{internal,prod}.{json,md}` on the compute
+repository. They contain aggregate metrics only; report text, identifiers, prompts, and
+generations remain under `data/`.
