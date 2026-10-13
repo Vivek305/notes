@@ -1,0 +1,244 @@
+# Advisor note #14 — External human anchor for v2 location and severity (MAPLEZ gold + IU MeSH)
+
+**Date:** 2026-10-13 · **Phase:** Tier 1 closeout → Tier 2 gate
+**Builds on:** #13 (closeout checklist), D45 (schema v2 = the four MAPLEZ fields), `d3` §8.3 (E5,
+RadGraph-XL). **Proposed IDs:** E5.1 (MAPLEZ gold) and E5.2 (IU MeSH). Renumber if they collide.
+
+**Why this note exists.** Every v2 `location` and `severity` number so far compares the student
+with the teacher. Nobody has measured whether the **v2 teacher** gets location and severity right.
+Tier 2 trains on those targets, so a systematic teacher error, for example a left/right flip,
+would carry forward silently. Two public human references cost about one GPU-hour and close
+that gap for chest. Non-chest anatomies have no public reference and stay with the reader study
+(W6).
+
+---
+
+## 1. What exists (checked 2026-10-13)
+
+### 1.1 MAPLEZ gold: **not in the GitHub repo.** It is on NIH Box.
+
+`rsummers11/CADLab/MAPLEZ_LLM_report_labeler` holds only code (`labeler_src/`,
+`classifier_src/`), README and licenses. Its README points to an NIH Box share:
+<https://nihcc.box.com/s/ctvezyhzxitamo05gmlumuu8m8h999la>
+
+| Box folder | Files | Use |
+|---|---|---|
+| `experiment_test_annotations/` | `mimic_human_annotations.csv`, `nih_human_annotations.csv`, `ct_…`, `mri_…`, `pet_…` | **The human gold.** E5.1 uses MIMIC and NIH. CT and MRI are a free extra for Tier 3 |
+| `new_dataset_annotations/` | `mimic_llm_annotations.csv`, `nih_llm_annotations_{train,val,test}.csv` | MAPLEZ's own LLM labels (SOLAR-70B, CC BY-NC). Optional comparator only, never gold |
+
+The advisor downloaded the two CXR gold files and inspected them in a local scratch directory.
+Nothing was copied into the repo.
+
+**License (`Health_Data_LICENSE`):** scientific research only, **no sharing of access**, take care
+not to identify anyone, report any identifying content. Rules for us:
+- Store the files under `data/external/maplez/` on the server. Never commit them, and never
+  put report text in notes or logs (README rule 1 applies even though the NIH text is anonymized).
+- **Owner:** before any E5.1 number appears in a product or regulatory document (as opposed to a
+  paper or internal research readout), confirm with legal that the research-only clause allows it.
+
+### 1.2 Gold format
+
+Each report has three rows: `type_annotation` ∈ {`labels`, `location`, `severity`}. There are 12
+CheXpert-style columns: enlarged cardiomediastinum, cardiomegaly, atelectasis, consolidation,
+lung edema, fracture, lung lesion, pleural effusion, pneumothorax, support device, lung opacity,
+pleural other.
+
+- `labels`: `1` present · `0` absent · `-1` uncertain · `-3` uncertain because stability was
+  mentioned · blank = not mentioned.
+- `location`: free text, `;`-separated.
+- `severity`: `1` mild · `2` moderate · `3` severe · blank or `-1` = not stated.
+
+| Set | Reports | Patients | Report text in file? | Watch out for |
+|---|---:|---:|---|---|
+| MAPLEZ-MIMIC | 350 | 163 | **No.** Key is `subjectid_studyid` | Text must come from our MIMIC copy. **(verify)** that all 350 study IDs are among the 127,832 ingested reports. If any are missing, get them from MIMIC-CXR on PhysioNet under the same DUA |
+| MAPLEZ-NIH | 200 | — | **Yes** (anonymized, median 56 words) | **45% have no FINDINGS/IMPRESSION header**, so run with `--text-fallback combined_clean` and record that choice |
+
+### 1.3 Gold support: positive studies, and how many of them carry location and severity
+
+| Category | MIMIC pos | MIMIC loc | MIMIC sev | NIH pos | NIH loc | NIH sev |
+|---|---:|---:|---:|---:|---:|---:|
+| pleural effusion | 106 | 102 | 73 | 43 | 39 | 21 |
+| lung opacity | 258 | 213 | 84 | 105 | 97 | 16 |
+| atelectasis | 63 | 62 | 17 | 9 | 8 | 5 |
+| consolidation | 31 | 26 | 4 | 42 | 39 | 6 |
+| lung edema | 96 | 24 | 60 | 3 | 1 | 0 |
+| cardiomegaly | 117 | 0 | 73 | 13 | 0 | 5 |
+| pneumothorax | 9 | 9 | 5 | 25 | 25 | 15 |
+| fracture | 18 | 17 | 0 | 1 | 1 | 0 |
+| lung lesion | 18 | 16 | 2 | 17 | 16 | 1 |
+| support device | 161 | 159 | 0 | 151 | 144 | 1 |
+| pleural other | 14 | 13 | 2 | 8 | 8 | 1 |
+| enlarged cardiomediastinum | 124 | 8 | 70 | 22 | 5 | 6 |
+
+How to read this:
+- **Location** has enough support for effusion, opacity, atelectasis, consolidation, devices and
+  (on NIH) pneumothorax.
+- **Severity** has enough support only for effusion, cardiomegaly, edema, opacity and
+  cardiomediastinum. Report every cell with its *n*; do not interpret cells with fewer than 10.
+- `-3` (stable) is common for cardiomegaly and cardiomediastinum in MIMIC: 238 cells in total.
+
+### 1.4 IU MeSH: already on disk (`v3/ecgen-radiology/`)
+
+Of 3,955 XMLs with `<major>` terms, there are 6,812 abnormal terms. **1,646 reports** carry a
+location qualifier and **1,020** a severity qualifier. The format is
+`Concept/qualifier/qualifier…`, for example `Pulmonary Atelectasis/base/right` or
+`Cardiomegaly/moderate`.
+
+Top concepts, with how many terms carry location / severity:
+
+| Concept | n | loc | sev |
+|---|---:|---:|---:|
+| opacity | 536 | 494 | 81 |
+| cardiomegaly | 375 | 0 | 218 |
+| pulmonary atelectasis | 347 | 314 | 74 |
+| calcified granuloma | 284 | 215 | 33 |
+| pleural effusion | 172 | 166 | 106 |
+| diaphragm | 144 | 125 | 21 |
+| airspace disease | 132 | 128 | 26 |
+| scoliosis | 124 | 60 | 57 |
+| nodule | 121 | 113 | 17 |
+| fractures, bone | 90 | 64 | 2 |
+
+MeSH is **indexer-assigned at report level**, not a span annotation. Treat it as a weaker
+reference than MAPLEZ: larger, cruder, and one that also covers non-MAPLEZ labels such as
+granuloma, diaphragm and scoliosis.
+
+---
+
+## 2. Category mapping: v3's 76 labels → MAPLEZ's 12
+
+Freeze this mapping in a YAML **before** any prediction is scored. A label counts toward a
+category if it is `Present` under any label mapped to that category. Location strings are
+unioned across those labels.
+
+| MAPLEZ | v3 labels (plus Unlisted matched by name) | Tier |
+|---|---|---|
+| cardiomegaly | Enlarged Heart (Cardiomegaly) | **clean** |
+| pleural effusion | Pleural Effusion, Loculated Effusion | **clean** |
+| pneumothorax | Pneumothorax | **clean** |
+| consolidation | Consolidation (Pneumonia) | **clean** |
+| lung edema | Edema (strict) · Edema ∪ Congestion (broad). Report both | clean / partial |
+| atelectasis | Linear Atelectasis, Lobar Collapse, Unlisted *atelectasis* | partial |
+| fracture | Abnormal rib, Spinal Compression Fracture, Unlisted *fracture* | partial |
+| lung lesion | Nodule, Unremarkable/Remarkable Nodules, Mass (Lung Mass), Pulmonary Cavity, Abscess | partial |
+| support device | all of `devices_surgical` that are lines, tubes or devices, plus Unlisted PICC / Tracheostomy | partial |
+| pleural other | Unremarkable/Remarkable Pleural Thickening, Pleural Plaque, Pleural Adhesion, Indeterminate Pleural/Fissural Thickening | partial |
+| lung opacity, enlarged cardiomediastinum | *(super-categories with no v3 equivalent)* | **descriptive only, no headline number** |
+
+**Headline numbers come from the four clean categories.** Partial categories are reported, but
+their presence F1 measures the mapping as much as the teacher.
+
+---
+
+## 3. Runs: one GPU job, about 1 hour
+
+| Run | Model | Inputs | Notes |
+|---|---|---|---|
+| **R1** (required) | **v2 teacher**, configured byte-identically to T1.2 (same prompt hash, guided JSON @2,048, temperature 0, trace on) | MAPLEZ-MIMIC 350 + MAPLEZ-NIH 200 + IU 3,927 = **4,477** | At T1.2's measured 1.46 reports/s (72,734 reports / 49,916 GPU-s) this takes about **51 min** on one GPU. Record the prompt byte-identity check as in #09 |
+| **R2** (same job, recommended) | **Frozen Tier-1 adapter**, chosen by #13's rule | the same 4,477 | Gives student-vs-human directly, plus student-vs-teacher on external text |
+
+- **No training and no prompt edits** before the results are read.
+- **Leakage:** MIMIC is `trainable: false` (D1), and NIH and IU are external. **(verify)** with one
+  join that none of the 4,477 report IDs or text hashes appears in any training manifest.
+
+---
+
+## 4. Scoring spec (CPU). Copy MAPLEZ's procedure first, then add our own view
+
+Reference code: `labeler_src/calculate_auc_v2.py` (location lines 220–365, severity 367–395) and
+`create_raw_table.py` (lines 462–530). Copy their vocabulary and replacement list **verbatim**
+into the scorer, with a citation in a comment.
+
+### 4.1 Presence (per category, plus micro over the clean four)
+- Gold positive = `1`. Gold negative = `0` or blank.
+- Gold `-1`/`-3` rows are excluded from the primary score and their count is reported.
+- Teacher positive = `Present`. Count `Uncertain` as negative in the primary score; a secondary
+  score drops `Uncertain` rows.
+- Reference values (MAPLEZ NIH, README table): cardiomegaly 0.952, effusion 0.961, pneumothorax
+  0.884, consolidation 0.952, edema 0.690. MAPLEZ handles uncertainty differently, so these are
+  **approximately comparable only**. Say so beside the table.
+
+### 4.2 Location (the main result)
+- **Rows scored:** gold = 1 **and** teacher Present for that category. MAPLEZ additionally
+  required its other labelers to agree, so our set of rows is larger. Note this.
+- **Keyword extraction:** match each word in the category's allowed vocabulary
+  (`list_of_location_labels_per_abnormality`) at word boundaries, case-insensitive, after applying
+  the replacements (`bilateral→right+left`, `lingula→left+lower`, `retrocardiac→left+lower+retrocardiac`,
+  `bibasilar→base+right+left`, …). Apply the identical extraction to gold and prediction.
+- **F1** over the flattened (report × keyword) matrix, in two variants:
+  **limited** (9 words: right, left, upper, lower, base, apical, retrocardiac, rib, middle) and
+  **full**.
+- MAPLEZ reference: **0.842** (MIMIC, all-words variant, 7 abnormalities).
+- **Laterality flip rate** (our addition, the clinically dangerous error): among scored rows where
+  gold names exactly one side, the fraction where the prediction names only the *other* side.
+- **IU variant (E5.2):** gold keywords come from the MeSH qualifiers of the mapped concept, using
+  the same vocabulary and replacements, plus `lower lobe→lower`, `upper lobe→upper`,
+  `middle lobe→middle`, `apex→apical`. Ignore the bare qualifier `lung`. Union the qualifiers when
+  a report repeats a concept.
+
+### 4.3 Severity
+- **Rows scored:** gold = 1 and teacher Present.
+- **Primary (MAPLEZ-comparable):** binary "any severity stated". Gold `1/2/3` → 1. Prediction:
+  non-empty `severity` → 1. MAPLEZ reference: **0.716** (MIMIC, 8 abnormalities).
+- **Secondary (3-class):** our `severity` is free text. Fix a lexicon now, before scoring:
+  - trace / minimal / small / mild → mild
+  - moderate → moderate
+  - large / severe / marked / extensive → severe
+  - anything else (e.g. *stable*, *chronic*, *new*) → unmapped, reported as its own count
+
+  Report a confusion matrix, not one number.
+- **IU:** MeSH `mild/minimal/small/borderline` vs `moderate` vs `severe/large/marked`. Binary
+  primary, 3-class secondary.
+
+### 4.4 Statistics
+- 95% CIs from a **patient-clustered bootstrap** for MIMIC (163 patients). For NIH and IU, use a
+  report-level bootstrap.
+- Give *n* in every cell. **Never pool MIMIC, NIH and IU.**
+- For R2, the student−teacher difference uses a **paired** bootstrap on the same reports.
+
+---
+
+## 5. Pre-registered readings. Commit this table before computing
+
+| Result (clean categories, MIMIC, limited vocabulary) | Reading | Action |
+|---|---|---|
+| Location F1 ≥ 0.80 **and** flip rate ≤ 2% | v2 teacher location is at MAPLEZ level | v2 location targets are cleared for Tier 2. Record it in DECISIONS |
+| Location F1 0.65–0.80, or flip rate 2–5% | Usable with a caveat | Break errors down by category and type: missing granularity (mild) vs wrong lobe vs wrong side. Tier 2 proceeds, and the readout carries the caveat |
+| Location F1 < 0.65, or flip rate > 5% | **Teacher location is not trustworthy** | **Stop before Tier-2 joint training.** Owner decides between a prompt rule fix plus a targeted re-label of location only, or dropping location from the training loss. Do not regenerate silently |
+| Severity binary F1 < 0.60 | The severity field is mostly noise | Strengthens D45's drop rule. It does **not** replace E4.2, which still decides |
+| Clean-category presence > 10pp below the MAPLEZ reference | Probably a definitional difference (taxonomy split, history rule). Possibly a teacher gap | List the top 10 disagreement types (**no report text**). Compare with the pilot-set root causes in `v3/pilot-test-set/` |
+| R2: student−teacher agreement with gold within ±2pp (paired CI includes 0) | Fidelity carries over to external human agreement | This is the paper sentence: the student inherits teacher quality on external human labels |
+
+---
+
+## 6. Readout format
+
+One table per dataset (MIMIC, NIH, IU), never pooled. Rows = category (clean first).
+Columns = n · presence F1 [CI] · location F1 limited [CI] · location F1 full [CI] · flip rate ·
+severity binary F1 [CI] — once for the teacher (R1) and once for the student (R2), plus the
+paired difference. Beneath each table: the MAPLEZ reference values, the mapping YAML hash, the
+prompt hash, and the count of excluded `-1`/`-3` rows.
+
+**Wording:** use "agreement with MAPLEZ human annotations" or "agreement with IU MeSH indexing".
+Do not call it a radiologist reference standard for our taxonomy, and do not say "accuracy"
+unqualified (README rule 3). This is the first **external human anchor** for location. It does
+**not** replace the W6 reader study, which remains the only route to a clinical-correctness claim.
+
+---
+
+## 7. Order, cost, and where it sits
+
+1. CPU, about half a day: fetch the files to `data/external/maplez/` on the server; the MIMIC-ID
+   coverage join; the leakage join; build inputs; mapping YAML and severity lexicon frozen and
+   hashed; commit §5.
+2. GPU, about 1 h: R1 + R2 in one job.
+3. CPU, about half a day: score, CIs, readout.
+
+**Proposal:** add this as **item 10** of the #13 closeout, or as an explicit **Tier-2 entry gate**.
+It needs no new teacher pass on training data and no change to `configs/locked/**` or
+`SUCCESS_MATRIX.md`.
+
+**Out of scope here:**
+- MAPLEZ CT/MRI gold (40 reports each). Park it for Tier 3, next to E5 RadGraph-XL.
+- Non-chest anatomies. These go into W6 as about 50 reports per anatomy.
+- Probability calibration. MAPLEZ calibrated against REFLACX, a separate track.
