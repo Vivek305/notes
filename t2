@@ -1,0 +1,121 @@
+# Advisor note #13 — Tier-1 closeout: definition of done after Wave 2
+
+**Date:** 2026-10-12 · **Phase:** Tier 1 → final readout and freeze
+**Builds on:** #11 (Wave-2 review, the P0/P1 lists) and #12 (Tier 2/3 board). This note says **when
+Tier 1 counts as finished** and what the final readout must contain. Nothing here needs a new
+teacher pass. Every rescore uses the **existing** T1.5 predictions; nothing is regenerated.
+
+---
+
+## 1. Tier 1 is done when all nine of these are true
+
+| # | Item | Type | Blocks |
+|---|---|---|---|
+| 1 | **v2 scorer committed with tests** (identity = 1.0; Absent projection; list evidence; off-taxonomy keys counted; runtime-anatomy path via `evaluate_transfer`; runtime M12 lexicon). **Rescore all 18 T1.5 prediction sets** with it. Report any number that moved from #10 and why | CPU | everything below |
+| 2 | **The M5 question answered** with the v2 teacher's own M5 per scope (§2) | CPU | schema decision, Tier 2 joint |
+| 3 | **The M2 drop decomposed**: trace (`3.45k-nt`), label hygiene, per-label schema/teacher shift | CPU + 1 run | schema decision |
+| 4 | **Controls run:** `3.45k-nt` (v1 no-trace 45k s17) and **T1.3 s23** | 2 GPU × ~10 h | readout |
+| 5 | **Anatomy table** (§3) for T1.3 zero-shot, T1.4 s17, T1.4 s23, plus T1.0 as a historical v1 row | CPU | C5 |
+| 6 | **CIs on every number**, plus paired patient bootstraps for T1.4 − T1.3 (chest, each anatomy) and T1.3 − 3.45k-nt | CPU | readout |
+| 7 | **Four decisions recorded** in DECISIONS (§4) | owner | Tier 2 |
+| 8 | **Tier-1 freeze manifest** `manifests/v2_tier1_freeze.json`, mirroring `v1_freeze.json` | CPU | Tier 2 / paper |
+| 9 | **Tier-1 readout** in the format of §5, plus doc refresh | CPU | — |
+
+M8 (warm vLLM throughput of the frozen adapter) and M10 (adversarial suite) go in the readout if
+they ran. If not, report each as "not measured" rather than leaving it out. **M10 has been
+implementable since Phase 2** (`radx.adversarial`, ~2,400 fixtures) and has never been driven
+through a model. It costs one short teacher pass plus one student pass, and it is the only
+robustness row in the pre-registered matrix. Run it on the frozen adapter if a GPU is free.
+
+---
+
+## 2. The M5 decision table (pre-write it before computing)
+
+| Teacher v2 asserted M5 (prod) | Student 0.933 vs teacher | Reading | Action |
+|---|---|---|---|
+| ≈ 0.93 | within ~0.5pp | **Schema v2 made the teacher quote less verbatim on prod**; the student copies it faithfully | Report it as a schema cost to grounding, next to v1's 0.982. Find which span types (list, `…`, multi-sentence). Don't regenerate the teacher (D48). Feeds the "narrow the schema" question in §4 |
+| ≈ 0.98 | ~5pp below | **The student is the problem** — `d3` §9.4's stop-and-fix | Break the student's non-verbatim spans down by type. Candidate fixes: guided decoding at inference (the pre-committed M6 fallback, not new), or a span-copy check. Tier-2 joint training waits |
+| either | — | **Scorer artifact** (e.g. list spans joined) | Fix the scorer for both sides, note it as a measurement fix, rescore. Not a model result |
+
+Do the same breakdown for spine (T1.3 0.990 → T1.4 0.943).
+
+---
+
+## 3. The anatomy table (one per anatomy, never pooled)
+
+Rows: T1.0 (v1, run 2.2, historical, descriptive) · **T1.3 zero-shot (v2 baseline)** · T1.4 s17 ·
+T1.4 s23. Teacher = T1.2 v2. Primary subset excludes chest-training overlap; full test as
+secondary.
+
+Columns: label micro-F1 [CI] · stable macro-F1 (support ≥ 10) [CI] · Cohen's κ [CI] ·
+missed-abnormal *n / N* · normal-class recall · M5 asserted/Absent with the **teacher's M5 beside
+it** · M12 with the **teacher's M12 beside it** · M6.
+
+Readings to state plainly:
+- **Spine / extremity:** T1.4 vs T1.3 is in-distribution supervised gain. Say so; it is not
+  portability.
+- **Ribs / abdomen:** neither adapter trained on them, so T1.4 > T1.3 there is the cross-anatomy
+  transfer signal. Note the open alternative (format familiarity with non-chest study-type strings)
+  and that LOAO would separate the two.
+- **Normality:** M3/M4/κ are conditional on unsigned definitions. Abdomen M4 went *down* under T1.4
+  (0.900 → 0.872/0.888) while M3 went up. Report it.
+
+---
+
+## 4. Decisions to record before Tier 2 builds on Tier 1
+
+1. **One joint adapter vs multi-LoRA.** The pre-committed gate passed (|ΔM1| ≤ 0.0013 on both
+   seeds), so: **one joint adapter**, conditional on items 2 and 5 showing no anatomy or
+   evidence regression attributable to joint training.
+2. **Which adapter is the frozen Tier-1 artifact.** Choose it **by rule, not by the better
+   number**: seed 17 is the primary seed for every run in this project, so **T1.4 s17** is frozen
+   and s23 is the replicate. Write this down before the P0 rescore, so the choice can't be read
+   as cherry-picked.
+3. **Schema v2: adopt / adopt with recorded costs / narrow.** It depends on §2 and on the M2
+   decomposition. Pre-write the rule: if the schema-attributable M1 cost (vs `3.45k-nt`) is within
+   0.01 and M5 is teacher-inherited, **adopt with recorded costs**. If the student loses grounding
+   relative to its own teacher, **fix before adopting**.
+4. **Production prompt arm stays P-split-B** (#07 §2.3). Record E1's B/C result correctly:
+   "C is not worse on 12 self-describing labels", not "C is stronger".
+
+Also record the D45 severity pre-commitment status: severity shipped, instrumented separately, and
+the drop decision waits for E4.2. Nothing in Tier 1 settles it.
+
+---
+
+## 5. Final readout format (`docs/tier1/results_tier_1.md`)
+
+1. **Gates, verbatim from DECISIONS, each with a verdict**: T1.2 merge, T1.3 schema cost (as
+   registered, plus the `3.45k-nt` attribution beside it), T1.4 chest non-degradation, M6, M5.
+   Failures included.
+2. **What schema v2 changes in the teacher**: v1↔v2 0.954 all / 0.957 head; v2 self-agreement
+   0.985; top-10 drift labels; per-anatomy v1↔v2; the Positive/Present prompt-vocabulary
+   inconsistency; the probability-field distribution.
+3. **Chest matrix**: M1–M6, M12 per split with CIs, for 3.45k, 3.45k-nt, T1.3 s17/s23,
+   T1.4 s17/s23. Ceilings computed with one function.
+4. **v2 fields**: 3-way status confusion, location/severity exact + verbatim rates, PMAD with the
+   caveat about the probability field.
+5. **Anatomy tables** (§3).
+6. **Robustness**: train/test exact-text-overlap subset; M10/M8 or "not measured".
+7. **What this does not show**: accuracy (no human reference), clinical validity of the four
+   draft taxonomies and normalcy rules (unsigned), anything about mammography/CT.
+8. **Claims C4/C5 restated** in the narrowed form the evidence supports.
+
+Doc refresh in the same pass: `results_to_date.md` (retract the three stale claims, #11 §7),
+`summary_tier_1.md` (still only T1.0), the `d3` §9 status, the §14 checklist and change log,
+`EXECUTION_READINESS.md` header, the PLAN contradictions (#11 §7).
+
+---
+
+## 6. Order and timing
+
+| When | What |
+|---|---|
+| 10-13 | Write §4 decisions 2 and the §2/§4.3 rules into DECISIONS **first**; launch `3.45k-nt` + T1.3 s23; scorer + tests |
+| 10-14 | Rescore T1.5 → M5 diagnosis, M2 hygiene, anatomy tables, CIs |
+| 10-14/15 | Controls land → score → M2 decomposition; schema decision (§4.3) |
+| 10-15 | Freeze manifest; readout draft. **Tier-2 joint training (#12) starts only after this** |
+| 10-16 | Readout final; docs refreshed; clinician review of the four anatomies still outstanding and stated as such |
+
+Tier 1 can close as **"final, conditional on unsigned clinical definitions"**. That is honest, and
+it doesn't need to wait for the clinician. The interpretation does.
