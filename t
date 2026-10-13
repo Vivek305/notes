@@ -1,148 +1,137 @@
-# Tier 1 Wave-2 training completion — advisor review
+# Advisor plan #12 — next steps: finish Tier 1 cleanly, then mammography (Tier 2) and CT (Tier 3)
 
-**Date:** 2026-10-12  
-**Scope:** T1.3 chest-only schema-v2 student, T1.4 joint schema-v2 student (seeds 17 and 23),
-and T1.5 unguided evaluation.  
-**Data handling:** Aggregate-only. No report text, report IDs, prompts, generations, or row-level predictions are included.
+**Date:** 2026-10-12 · **Phase:** Tier 1 close → Tier 2 → Tier 3 (feasibility + first experiments)
+**Owner input:** mammography and some Tier-3 experiments are required in this window; CT data
+(CT-RATE, and PhysioNet access) is expected within a few days.
+**Builds on:** #11 (`2026-10-12_tier1_wave2-review_publication-path.md`). #11's P0 list still
+applies. This note **revises #11 §4 "hold Tier 2"** as follows: generation work (teacher passes,
+zero-shot inference) may start now; **no Tier-2/3 result is read, and no joint training starts,
+until the v2 scorer is fixed** (P0 items 1–4, 7). All figures are fidelity to the v3 teacher.
 
-## Executive readout
+---
 
-All three planned training runs completed and wrote adapters plus `run.json` provenance under
-`data/runs/`. They used the prepared no-trace schema-v2 corpora and the pre-registered
-two-epoch, effective-batch-64 recipe. T1.5 job 48753 also completed: it generated and
-aggregate-scored every planned adapter-by-scope pair with unguided decoding.
+## 0. The rule that lets us go faster without losing attribution
 
-| Job | Final job ID | Result | Seed | Corpus rows | Steps | Runtime | s/step | Peak training VRAM |
-|---|---:|---|---:|---:|---:|---:|---:|---:|
-| T1.3 chest-only v2 | 48722 | completed | 17 | 44,808 | 1,401 | 9h 32m 40s | 24.53 | 58.10 GiB |
-| T1.4 joint v2 | 48725 | completed | 17 | 54,182 | 1,694 | 11h 47m 56s | 25.07 | 58.10 GiB |
-| T1.4 joint v2 | 48726 | completed | 23 | 54,182 | 1,694 | 11h 52m 08s | 25.22 | 58.06 GiB |
+**Generate freely, read only through a fixed scorer.** Teacher labeling and student inference don't
+depend on the scorer, so they can run in parallel with the P0 fixes. Every Tier-2/3 number goes
+through the same tested v2 scorer as chest and the four anatomies, or it is not reported. That
+scorer (Absent projection, list evidence, runtime-taxonomy anatomy path via `evaluate_transfer`,
+runtime M12 lexicon, teacher-reference M5/M12, patient-bootstrap CIs) is now **the critical path**.
+It needs to be committed with tests by **10-14**.
 
-The completed runs are 4.2%–6.9% faster than the 3.45k reference rate of 26.33 s/step.
-The 58.1-GiB peak is the recorded training working set, below the 80-GiB H100 capacity.
+---
 
-On the primary schema-v2 chest comparisons, T1.3 reached head-label fidelity to the v3 teacher
-of 0.9568 (internal) and 0.9540 (production). T1.4 seed 17 reached 0.9566 and 0.9546; seed 23
-reached 0.9581 and 0.9542. All unguided JSON-validity values exceeded the 0.99 fallback
-threshold, so guided decoding was not used. The two joint seeds remain within 0.0013 of T1.3 on
-chest M1, well inside the pre-registered 0.01 joint-training tolerance.
+## 1. Tier 2 — mammography
 
-## Training contract and provenance
+### 1.1 Make the calcification call stop blocking (T2.0, CPU, today)
+No `configs/taxonomies/mammography.yaml` exists in the mirror, and the clinician hasn't signed the
+cyst / benign-calcification call (`calcificat` 70.0%, `nodul` 68.9% of reports). Don't run the
+teacher twice, once per reading. Instead:
 
-| Run | Corpus SHA-256 | Config SHA-256 | Source SHA-256 | Target | Max sequence | Effective batch | Warmup |
-|---|---|---|---|---|---:|---:|---:|
-| T1.3 | `e2cdf9246c0d…b318dade` | `d73e2dd9e948…8eaf7a9c` | `944e10bdb772…540bddce` | `target_text_no_trace` | 3,076 | 64 | 42 steps |
-| T1.4 s17 | `596cea1f8a39…c7624b95` | `586856345472…c51c053` | `944e10bdb772…540bddce` | `target_text_no_trace` | 3,076 | 64 | 51 steps |
-| T1.4 s23 | `596cea1f8a39…c7624b95` | `1ad851a4ebd…ca222d07` | `944e10bdb772…540bddce` | `target_text_no_trace` | 3,076 | 64 | 51 steps |
+- **Give the contested findings their own labels**: e.g. `Benign-appearing Calcifications`,
+  `Simple Cyst`, `Post-surgical Change`, separate from `Suspicious Calcifications`, `Mass`,
+  `Architectural Distortion`, `Asymmetry`, `Skin/Nipple Change`, `Axillary Lymphadenopathy`.
+  **Breast density stays a descriptor, not a finding** (normalcy §3.1). Aim for ~25–35 labels,
+  like the other anatomies.
+- **Make `is_normal` a deterministic function of the findings under two named readings**:
+  - **A (chest convention, primary):** any Present/Uncertain finding ⇒ abnormal.
+  - **B (screening convention):** the same, ignoring the benign-labelled set.
+  The teacher emits findings once. Teacher and student `is_normal` are each recomputed from their
+  own findings under A and B, using the same function. Report M3/M4/κ under both as an interval.
+- Record both readings, the benign set and the mapping in DECISIONS **before** labeling. One teacher
+  pass instead of two. The clinician's eventual call picks which end of the interval is the result,
+  with no relabeling.
 
-Each completed run logged 343 LoRA target modules across 10 module kinds, 155.5M trainable
-parameters out of 8,096.6M, and `resumed_from_step: 0`. The T1.4 seeds share the exact joint
-corpus hash as required.
+### 1.2 Split and leakage (CPU)
+Use the **locked Phase-0 patient split**. `internal_other` was already assigned from the same
+patient pool as chest, so this gives zero chest-test overlap by construction (unlike the
+re-seeded anatomy split, #11 §3.4). Effective unique 6,859 / 8,972 patients / 1,088 shared with
+chest. Then apply the L1–L4 rules from #07 §4.4 against chest **and** spine/extremity, plus a
+token-length dry run (prompt + target, max vs the ~4,700 wall). Mammo reports are long by
+radiograph standards (median 357 chars), but should still be far below it.
 
-## Pre-launch corpus gates carried into these runs
+### 1.3 Runs
+| # | Run | GPU | Reads against |
+|---|---|---|---|
+| T2.1a | Capacity probe: W0-1c contract on the 256 longest mammo reports | ~15 min | at cap ≤ 1%, validity ≥ 0.99 (same gate as T1.2) |
+| T2.1 | Teacher v2, all 6,859, 2 hash shards; + T=0.1 replica on a fixed 1,000 | ~1 h wall on 2 GPUs | merge invariants; teacher ceiling |
+| T2.2 | Zero-shot: **T1.3** and **T1.4 s17** with the mammo list; base E4B; lexical floor | ~1 h | same reference pack as T1.0 |
+| T2.3 | Joint: chest 44,808 + spine/extremity train + mammo train, **s17 and s23** | ~15 h each | chest M1 within 0.01 of T1.4; spine/extremity not below T1.4 beyond CI; mammo vs T2.2 |
+| T2.3b *(optional)* | Mammo-only LoRA (separate adapter, multi-LoRA option) | ~2–3 h | vs T2.3 on mammo; answers "joint vs separate" directly |
 
-- **D54** records the Wave-2 training and scoring contract.
-- T1.3 retained 44,808 valid, uncensored, unrepaired chest targets from the frozen 45k
-  P-split-B source. The prompt-byte identity and schema-v2 no-trace round-trip checks passed.
-- T1.4 retained that exact T1.3 chest component and added audited spine/extremity rows for
-  54,182 total rows. The leakage audit removed 137 L1 and 104 L3 prohibited overlaps;
-  L2 cross-anatomy test overlap was zero for both directions.
-- The measured maximum prompt-plus-target sequence length was 3,076, below the 4,700-token
-  training wall.
-- The remote preflight passed corpus integrity, tokenizer contract, CUDA, training stack, and
-  disk headroom before the launches.
+**Gate for starting T2.3 (write it down first):** P0 items 1–4 read, T2.1 passes its merge gate, and
+T2.2 has been scored. Comparator framing: **A (extraction fidelity) is the deliverable, C (BI-RADS)
+is retired.** Record that as an owner decision; it has been open since #07.
 
-## Operational note
+---
 
-The first T1.4 seed-17 and seed-23 submissions (jobs 48723 and 48724) failed before training
-with CUDA error 803, an unsupported display-driver/CUDA-driver combination. Restore submissions
-48725 and 48726 started from no checkpoint and completed; this is reflected by
-`resumed_from_step: 0` in both final run records. T1.3 completed on its first submission.
+## 2. Tier 3 — CT
 
-## T1.5 unguided evaluation — completed
+### 2.1 First, pin down which data is coming
+- **CT-RATE** is distributed on Hugging Face under **CC-BY-NC-SA 4.0**, not via PhysioNet. That's
+  fine for a research paper, but this is a commercial entity, so get a **written legal note**
+  (H5, open since #07) and a DECISIONS entry before any CT-RATE text reaches the teacher. Check on
+  arrival: counts, report provenance (I believe the reports were translated into English; confirm
+  it, because it matters for the same reason as `Report_English`), and the official train/valid
+  split. Use their **validation split as our test**.
+- **PhysioNet credentialing** separately unlocks **RadGraph-XL** (radiologist-annotated CT/MR/CXR,
+  the external anchor in `d3` E5), **MIMIC-IV-Note** (CT/MR/US report volume) and **MIMIC-CXR**
+  (the public chest replication #11 asks for). If both arrive, CT-RATE is the volume and
+  RadGraph-XL is the anchor.
 
-**Execution.** Job 48753, `cxr-nt-t1-5-schema-v2-evaluation`, completed on 2026-10-12. The
-terminal log records all six scopes generated and scored for each adapter; the VLLM `SIGTERM` /
-`start mode=abort` messages occur after each adapter's completed requests and are normal engine
-teardown. No job abort occurred. All 18 prediction sets had zero missing rows. Scoring used
-temperature 0, unguided decoding, and a 2,048-token output cap. M12 was computed with medspaCy.
+### 2.2 Experiments (each answers one `d3` §11.4 question)
+| # | Experiment | Question it answers | GPU |
+|---|---|---|---|
+| T3.0 | **Token-length study** (Gemma tokenizer): teacher prompt + report + expected output vs `max_model_len` / KV; student prompt + report + target vs ~4,700 | "Is sequence length the blocker?" Decide this first; it's cheap | 0 |
+| T3.1 | CT taxonomy (~30–40 labels) + normalcy + study-type string, **provisional**. Seed from the chest X-ray labels that carry over (consolidation, effusion, nodule, cardiomegaly…) plus CT-specific ones (ground-glass, emphysema, bronchiectasis, mosaic attenuation, coronary calcification, lymphadenopathy…), and map to CT-RATE's own abnormality classes where possible. **Record how many labels overlap the chest taxonomy**: it becomes a variable in the portability story | 0 |
+| T3.2 | Teacher capacity probe: 256 longest + 1,000 random, W0-1c contract | CT outputs will be longer (more findings per report); expect at-cap > 1% at 2,048. If so: cap 3,072 + re-derived `max_model_len`, rerun **only** the probe, and record it. Never edit a gate after a result | ~1 h |
+| T3.3 | Teacher labeling: ~8–10k unique train reports (patient-disjoint, official train split) + the official validation split; T=0.1 replica on 1,000 test reports | Builds the reference | ~3–5 h wall on 2 GPUs (verify the rate in T3.2) |
+| T3.4 | **Zero-shot**: T1.4 s17 (and T2.3 if ready) with the CT list; base E4B; lexical floor; teacher replica as ceiling | "Does the radiograph adapter transfer across modality?" Strongest possible N1 result if yes | ~1–2 h |
+| T3.5 | **CT LoRA, cold vs warm start**, at **2k and ~8k** train reports: (a) from base E4B, (b) continued from T1.4 s17 | "Does radiograph distillation buy sample efficiency on a new modality?" A 2×2 that publishes well whatever the outcome, and it is the honest version of "needs a separate adapter" | 4 runs, ~2–6 h each |
+| T3.6 | External agreement: teacher and student vs **CT-RATE's provided labels** on the overlapping classes; RadGraph-XL entity-level grounding if PhysioNet lands | Agreement with an **external labeler**, not accuracy (CT-RATE's labels are themselves model-derived; verify) | 0–1 h |
 
-**Denominators.** The primary v2 chest populations contain 3,237 internal and 11,345 production
-reports. The 11 internal and 50 production invalid teacher rows were excluded before the frozen
-scoring reference files were written; each scored reference file therefore contains zero invalid
-rows. Anatomy populations are 466 abdomen, 1,333 extremity, 428 ribs, and 967 spine reports.
-All four exclude the required chest-training patient overlap; spine and extremity additionally
-use their frozen anatomy test assignments.
+`d3` §11.4 says separate adapter, not joint, for CT. Keep that: **no CT data enters the
+chest/radiograph adapter in this window.** "Not yet" stays a permitted conclusion at every step.
 
-### Primary v2 results
+---
 
-M5 is reported as **Absent / asserted** evidence exact-match rate. Anatomy M1 is shown as N/A:
-the scorer currently obtains its head-label list from the immutable chest taxonomy, which has no
-labels in common with runtime anatomy taxonomies; its emitted `0.0000` is a denominator artifact,
-not a measure of anatomy fidelity to the v3 teacher. M2–M6 and M12 use each runtime taxonomy.
+## 3. Tier 1 items that must still finish (from #11)
 
-| Adapter | Scope | N | M1 | M2 | M3 | M4 | M5 absent / asserted | M6 | M12 |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| T1.3 | abdomen | 466 | N/A | 0.4389 | 0.9728 | 0.8997 | 0.9458 / 0.9792 | 1.0000 | 0.0728 |
-| T1.3 | extremity | 1,333 | N/A | 0.3854 | 0.9817 | 0.9777 | 0.9100 / 0.9822 | 0.9940 | 0.1095 |
-| T1.3 | ribs | 428 | N/A | 0.3748 | 0.9494 | 0.9642 | 0.9491 / 0.9883 | 0.9977 | 0.0760 |
-| T1.3 | spine | 967 | N/A | 0.4217 | 0.9778 | 0.9227 | 0.9643 / 0.9899 | 0.9959 | 0.0608 |
-| T1.3 | chest internal | 3,237 | 0.9568 | 0.7948 | 0.9921 | 0.9952 | 0.9566 / 0.9923 | 1.0000 | 0.0026 |
-| T1.3 | chest production | 11,345 | 0.9540 | 0.7903 | 0.9966 | 0.9950 | 0.9609 / 0.9328 | 0.9997 | 0.0113 |
-| T1.4 s17 | abdomen | 466 | N/A | 0.5357 | 0.9891 | 0.8721 | 0.8967 / 0.9931 | 1.0000 | 0.0675 |
-| T1.4 s17 | extremity | 1,333 | N/A | 0.5779 | 0.9897 | 0.9916 | 0.9318 / 0.9746 | 1.0000 | 0.1123 |
-| T1.4 s17 | ribs | 428 | N/A | 0.6020 | 0.9831 | 0.9863 | 0.9547 / 0.9934 | 1.0000 | 0.0987 |
-| T1.4 s17 | spine | 967 | N/A | 0.6583 | 0.9944 | 0.9825 | 0.9407 / 0.9427 | 1.0000 | 0.0664 |
-| T1.4 s17 | chest internal | 3,237 | 0.9566 | 0.7686 | 0.9908 | 0.9934 | 0.9529 / 0.9902 | 1.0000 | 0.0026 |
-| T1.4 s17 | chest production | 11,345 | 0.9546 | 0.7941 | 0.9965 | 0.9950 | 0.9626 / 0.9285 | 0.9999 | 0.0112 |
-| T1.4 s23 | abdomen | 466 | N/A | 0.6103 | 0.9810 | 0.8884 | 0.9458 / 0.9890 | 1.0000 | 0.0697 |
-| T1.4 s23 | extremity | 1,333 | N/A | 0.4968 | 0.9932 | 0.9911 | 0.9319 / 0.9755 | 1.0000 | 0.1118 |
-| T1.4 s23 | ribs | 428 | N/A | 0.5920 | 0.9789 | 0.9764 | 0.9546 / 0.9861 | 1.0000 | 0.1042 |
-| T1.4 s23 | spine | 967 | N/A | 0.6915 | 0.9956 | 0.9610 | 0.9492 / 0.9443 | 1.0000 | 0.0683 |
-| T1.4 s23 | chest internal | 3,237 | 0.9581 | 0.8038 | 0.9928 | 0.9946 | 0.9556 / 0.9916 | 0.9997 | 0.0033 |
-| T1.4 s23 | chest production | 11,345 | 0.9542 | 0.7572 | 0.9965 | 0.9957 | 0.9609 / 0.9333 | 0.9998 | 0.0111 |
+These are in the board below and aren't optional. Tier 2/3 numbers are meaningless without the
+fixed scorer, and the paper needs the controls.
 
-### Chest diagnostics and comparisons
+- **P0 (CPU):** M5 diagnosis with the v2 teacher's own M5; M2 decomposition + label hygiene;
+  anatomy metrics via `evaluate_transfer`; M12 fixed; CIs everywhere; same-function ceilings;
+  scorer + tests committed; train/test exact-text overlap.
+- **P1 (GPU):** `3.45k-nt` (trace confound), T1.3 s23, M8 warm benchmark, IU/Open-i replication.
+- **Deferred:** P-split-C side arm, N2/E2.4–E2.6, LOAO (LOAO only if a GPU is idle; it is the
+  best paper experiment among the deferred ones).
 
-The location and severity diagnostics below are exact agreement with the v2 teacher followed by
-the rate that emitted text appears verbatim in the source. PMAD is the mean absolute probability
-difference. Full status-confusion matrices remain in the aggregate-only T1.5 JSON artifacts.
+---
 
-| Adapter | Scope | Location exact / source | Severity exact / source | PMAD |
-|---|---|---:|---:|---:|
-| T1.3 | internal | 0.8066 / 1.0000 | 0.7860 / 1.0000 | 0.0015 |
-| T1.3 | production | 0.8456 / 0.9748 | 0.7667 / 0.9906 | 0.0058 |
-| T1.4 s17 | internal | 0.8132 / 0.9993 | 0.7889 / 0.9994 | 0.0014 |
-| T1.4 s17 | production | 0.8458 / 0.9744 | 0.7658 / 0.9905 | 0.0060 |
-| T1.4 s23 | internal | 0.8225 / 1.0000 | 0.7783 / 1.0000 | 0.0012 |
-| T1.4 s23 | production | 0.8464 / 0.9747 | 0.7680 / 0.9904 | 0.0060 |
+## 4. Board (4× H100)
 
-The retained-denominator 3.45k v1 comparison is descriptive only: it uses the v1 teacher and
-the same valid chest rows, whereas the primary results above use the v2 teacher. It measured M1
-of 0.9657 internal and 0.9605 production, M2 of 0.8534 and 0.8857, M3 of 0.9941 and 0.9979, M4
-of 0.9941 and 0.9938, M5 of 0.9972 and 0.9823, and M6 of 1.0000 and 0.9999, respectively. T1.3's
-descriptive M1 difference from that v1 reference is -0.0089 internal and -0.0065 production;
-both are within the 0.01 schema-cost guide. A same-scorer guided-v2 self-agreement reference is
-not produced by job 48753 and should be included beside this comparison before making a final
-schema decision.
+| Day | GPU 1 | GPU 2 | GPU 3 | GPU 4 | CPU / people |
+|---|---|---|---|---|---|
+| **10-13 Tue** | `3.45k-nt` (~10 h) | T1.3 s23 (~10 h) | M8 benchmark → IU/Open-i replication | T2.1a mammo probe (as soon as the taxonomy is in) | **v2 scorer fixes + tests**; mammo taxonomy + readings A/B + split; DECISIONS (Tier-2 comparator, mammo normalcy mapping, CT-RATE licence, T2/T3 gates); legal + clinician + ethics requests out |
+| **10-14 Wed** | → free | → free | T2.1 shard 0 → T2.2 zero-shot | T2.1 shard 1 → T=0.1 replica | P0 readout (M5, M2, anatomy, M12, CIs); score T2.2; CT data ingest + T3.0 lengths |
+| **10-15 Thu** | **T2.3 s17** (~15 h), only if the T2.3 gate passes | **T2.3 s23** | T3.2 CT capacity probe | T3.1 taxonomy review / T3.3 starts if T3.2 passes | CT taxonomy; Tier-1 readout draft |
+| **10-16 Fri** | T2.3 → T2.4 eval | T2.3 → T2.4 eval | T3.3 CT teacher shard 0 | T3.3 shard 1 + replica | |
+| **10-19 Mon** | T2.4 scoring passes (chest, 4 anatomies, mammo; both seeds) | T2.3b mammo-only *(opt.)* | **T3.4** CT zero-shot | T3.5 cold 2k | T2.4 readout |
+| **10-20 Tue** | LOAO *(if idle)* | | T3.5 warm 2k → cold 8k | T3.5 warm 8k | T3.6 external agreement |
+| **10-21 → 10-23** | buffer / reruns | | T3 scoring | | Tier-2 + Tier-3 readouts |
+| **10-26 →** | — | | | | consolidated claims doc → paper outline |
 
-### Gate reading
+Estimates come from measured rates (teacher ~1.45 rows/s/GPU on radiographs, training ~25 s/step).
+CT rates are unknown until T3.2. This project's estimates have always run long, so the buffer
+is real.
 
-- **Unguided-format gate: passed.** The minimum M6 is 0.9940, so the pre-committed guided-decoding
-  fallback did not trigger.
-- **Joint-training chest gate: passed for both seeds.** Relative to T1.3, the T1.4 M1 changes are
-  -0.0002 / +0.0006 (s17, internal / production) and +0.0013 / +0.0002 (s23), all within 0.01.
-- **Anatomy reading: promising but incomplete.** T1.4 generally improves M2 over T1.3, especially
-  on spine and ribs, but M1 cannot be interpreted until the scorer is given a runtime-anatomy
-  head-label definition or that column is formally removed for anatomy. M12 ranges from 0.0608 to
-  0.1123 across anatomy, materially above chest (0.0026–0.0113), and should be reviewed alongside
-  the runtime taxonomy and evidence policy before any release claim.
-- **Evidence reading: requires advisor review.** Asserted evidence fidelity is high on internal
-  chest (0.9902–0.9923) but 0.9285–0.9333 on production chest; location and severity source rates
-  are near-extractive, while exact teacher agreement is lower. This is a schema-v2 evidence-format
-  question, not evidence of clinical correctness.
+---
 
-Aggregate sources are `reports/eval/t1_5_t1_{3,4_s17,4_s23}_*.{json,md}` and
-`reports/eval/t1_5_3_45k_v1_matched_chest_test_{internal,prod}.{json,md}` on the compute
-repository. They contain aggregate metrics only; report text, identifiers, prompts, and
-generations remain under `data/`.
+## 5. What to send back
+
+1. 10-14: scorer committed (test list from #11 §3.1), P0 readout, mammo taxonomy + DECISIONS numbers.
+2. After T2.1/T2.2 and T3.2: the self-describing aggregates (#07 §0.1 item 5), each against its
+   pre-written gate.
+3. Human and legal status every readout: clinician (mammo + 4 anatomies), legal (CT-RATE,
+   Gemma output terms), ethics/IRB, PhysioNet. Include "not started" when that's the truth.
