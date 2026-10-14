@@ -1,137 +1,183 @@
-# Advisor plan #12 — next steps: finish Tier 1 cleanly, then mammography (Tier 2) and CT (Tier 3)
+# Advisor note #16: E5 R2 is valid, but the Tier-2 gate is unread. Code to read it is ready
 
-**Date:** 2026-10-12 · **Phase:** Tier 1 close → Tier 2 → Tier 3 (feasibility + first experiments)
-**Owner input:** mammography and some Tier-3 experiments are required in this window; CT data
-(CT-RATE, and PhysioNet access) is expected within a few days.
-**Builds on:** #11 (`2026-10-12_tier1_wave2-review_publication-path.md`). #11's P0 list still
-applies. This note **revises #11 §4 "hold Tier 2"** as follows: generation work (teacher passes,
-zero-shot inference) may start now; **no Tier-2/3 result is read, and no joint training starts,
-until the v2 scorer is fixed** (P0 items 1–4, 7). All figures are fidelity to the v3 teacher.
+**Date:** 2026-10-14 · **Phase:** Tier 1 closeout → Tier 2 gate
+**Reviews:** `602d70a` ("Publish aggregate E5 R2 results", `docs/tier1/2026-10-14_e5_r2_aggregate_results.md`)
+**Builds on:** #14 (E5 spec and §5 gate), #15 (R1 review and rerun spec), #13 (Tier-1 closeout), #12 (Tier-2 plan)
 
----
-
-## 0. The rule that lets us go faster without losing attribution
-
-**Generate freely, read only through a fixed scorer.** Teacher labeling and student inference don't
-depend on the scorer, so they can run in parallel with the P0 fixes. Every Tier-2/3 number goes
-through the same tested v2 scorer as chest and the four anatomies, or it is not reported. That
-scorer (Absent projection, list evidence, runtime-taxonomy anatomy path via `evaluate_transfer`,
-runtime M12 lexicon, teacher-reference M5/M12, patient-bootstrap CIs) is now **the critical path**.
-It needs to be committed with tests by **10-14**.
+**Verdict.**
+- **R2 is valid.** The teacher is the 31B (4,338 of 4,341 valid; 3 length stops, 0.07%), the student
+  ran on P-split-B, and the outputs match their run-record hashes. R1's 19% truncation is gone, which
+  confirms it came from the wrong model. The whitespace remedy is not needed.
+- **Fidelity carries over to external text.** Head micro F1 0.956 (T1.5 in-domain: 0.954–0.958),
+  abnormal recall 0.997. All 12 paired student − teacher presence intervals on the clean categories
+  include 0 or touch it (MIMIC cardiomegaly: upper bound 0.000). That is the paper sentence.
+- **Tier 2 is not yet cleared.** #14 §5 decides on location and left/right flips, not presence. The
+  scorer computed those, but the readout omits them. Consolidation also trips the >10pp rule.
+- **Not a Tier-2 go today.** It becomes a go when the §5 location reading is `clear` or `caveat` and
+  #13's closeout items 7–8 are done. Mammography generation can start once its taxonomy exists.
 
 ---
 
-## 1. Tier 2 — mammography
+## 1. Findings on the R2 readout
 
-### 1.1 Make the calcification call stop blocking (T2.0, CPU, today)
-No `configs/taxonomies/mammography.yaml` exists in the mirror, and the clinician hasn't signed the
-cyst / benign-calcification call (`calcificat` 70.0%, `nodul` 68.9% of reports). Don't run the
-teacher twice, once per reading. Instead:
-
-- **Give the contested findings their own labels**: e.g. `Benign-appearing Calcifications`,
-  `Simple Cyst`, `Post-surgical Change`, separate from `Suspicious Calcifications`, `Mass`,
-  `Architectural Distortion`, `Asymmetry`, `Skin/Nipple Change`, `Axillary Lymphadenopathy`.
-  **Breast density stays a descriptor, not a finding** (normalcy §3.1). Aim for ~25–35 labels,
-  like the other anatomies.
-- **Make `is_normal` a deterministic function of the findings under two named readings**:
-  - **A (chest convention, primary):** any Present/Uncertain finding ⇒ abnormal.
-  - **B (screening convention):** the same, ignoring the benign-labelled set.
-  The teacher emits findings once. Teacher and student `is_normal` are each recomputed from their
-  own findings under A and B, using the same function. Report M3/M4/κ under both as an interval.
-- Record both readings, the benign set and the mapping in DECISIONS **before** labeling. One teacher
-  pass instead of two. The clinician's eventual call picks which end of the interval is the result,
-  with no relabeling.
-
-### 1.2 Split and leakage (CPU)
-Use the **locked Phase-0 patient split**. `internal_other` was already assigned from the same
-patient pool as chest, so this gives zero chest-test overlap by construction (unlike the
-re-seeded anatomy split, #11 §3.4). Effective unique 6,859 / 8,972 patients / 1,088 shared with
-chest. Then apply the L1–L4 rules from #07 §4.4 against chest **and** spine/extremity, plus a
-token-length dry run (prompt + target, max vs the ~4,700 wall). Mammo reports are long by
-radiograph standards (median 357 chars), but should still be far below it.
-
-### 1.3 Runs
-| # | Run | GPU | Reads against |
-|---|---|---|---|
-| T2.1a | Capacity probe: W0-1c contract on the 256 longest mammo reports | ~15 min | at cap ≤ 1%, validity ≥ 0.99 (same gate as T1.2) |
-| T2.1 | Teacher v2, all 6,859, 2 hash shards; + T=0.1 replica on a fixed 1,000 | ~1 h wall on 2 GPUs | merge invariants; teacher ceiling |
-| T2.2 | Zero-shot: **T1.3** and **T1.4 s17** with the mammo list; base E4B; lexical floor | ~1 h | same reference pack as T1.0 |
-| T2.3 | Joint: chest 44,808 + spine/extremity train + mammo train, **s17 and s23** | ~15 h each | chest M1 within 0.01 of T1.4; spine/extremity not below T1.4 beyond CI; mammo vs T2.2 |
-| T2.3b *(optional)* | Mammo-only LoRA (separate adapter, multi-LoRA option) | ~2–3 h | vs T2.3 on mammo; answers "joint vs separate" directly |
-
-**Gate for starting T2.3 (write it down first):** P0 items 1–4 read, T2.1 passes its merge gate, and
-T2.2 has been scored. Comparator framing: **A (extraction fidelity) is the deliverable, C (BI-RADS)
-is retired.** Record that as an owner decision; it has been open since #07.
+| # | Finding | Severity |
+|---|---|---|
+| 1 | The gate numbers are missing. #14 §5 reads clean-category MIMIC location F1 (limited vocabulary) and the flip rate; binary severity goes beside them. `scores.md` on the server has per-category values but no pooled gate number, and the readout shows presence only | **P0: blocks the Tier-2 decision** |
+| 2 | §5 was never recorded in DECISIONS (last entry D54), so the gate is not on record ahead of the readout. Now **D55**, with an honesty note | P0 (fixed in this commit; copilot adds one sentence, step C1) |
+| 3 | Consolidation teacher presence: MIMIC 0.717, NIH 0.750, against MAPLEZ's 0.952. That is >10pp, which triggers §5's disagreement breakdown. My guess is a definitional mismatch (v3's narrow `Consolidation (Pneumonia)` vs MAPLEZ's broader category, with the teacher using opacity or atelectasis labels instead). The breakdown has to show it, not us assume it | P1 |
+| 4 | The readout leaves out per-cell n, gold positives, the excluded `-1/-3` counts and the invalid-as-negative sensitivity numbers (#14 §6, #15 §5.1) | P1 |
+| 5 | All-label macro F1 0.784, CI 0.772–0.852. The point estimate sits at the bottom edge. `scoring.macro_f1` skips labels with no support in the rows scored, so rare labels drop out of bootstrap resamples and the macro rises. The interval is biased upward | P1 (fixed: new `M2_macro_f1_support_ge_10`) |
+| 6 | "Externally expected T1.2 and T1.5 hash values were not supplied." The check doesn't need us to supply them; it needs T1.2's and T1.5's own rendered prompts, which are on the server. **The student half is verified here:** E5's student system prompt SHA-256 `bef8491d…` equals the frozen P-split-B corpus hash in `manifests/phase1_corpus.json` (now a test). The teacher half needs step C2 | P1 |
+| 7 | MIMIC n = 214 of 350. Prepare has a PhysioNet fallback, but it was not used | P1 |
+| 8 | **Advisor bug in `d9a2081`:** that fallback fed the *whole raw report* (indication, history, comparison) to the models. Every ingested MIMIC row is v3's `combined_clean`, FINDINGS + IMPRESSION only. Had the 136 been recovered that way, they would have had different input text. Fixed: the fallback now runs v3's own tier-1/2 section parser and counts the rows v3 would have escalated to its LLM parser | P1 (fixed; R2 unaffected because it recovered 0 rows) |
+| 9 | `90cb58c` (the leaked MAPLEZ gold, MIMIC evidence spans and QMS documents) is still reachable on the remote branch. The repo is private now, but the history rewrite (#15 §1) is still the owner's job | P0 owner |
 
 ---
 
-## 2. Tier 3 — CT
+## 2. What this commit changes (copilot just runs it)
 
-### 2.1 First, pin down which data is coming
-- **CT-RATE** is distributed on Hugging Face under **CC-BY-NC-SA 4.0**, not via PhysioNet. That's
-  fine for a research paper, but this is a commercial entity, so get a **written legal note**
-  (H5, open since #07) and a DECISIONS entry before any CT-RATE text reaches the teacher. Check on
-  arrival: counts, report provenance (I believe the reports were translated into English; confirm
-  it, because it matters for the same reason as `Report_English`), and the official train/valid
-  split. Use their **validation split as our test**.
-- **PhysioNet credentialing** separately unlocks **RadGraph-XL** (radiologist-annotated CT/MR/CXR,
-  the external anchor in `d3` E5), **MIMIC-IV-Note** (CT/MR/US report volume) and **MIMIC-CXR**
-  (the public chest replication #11 asks for). If both arrive, CT-RATE is the volume and
-  RadGraph-XL is the anchor.
+All of it is tested on synthetic data (140 passed, 15 skipped; the one failure is the known
+server-only `prompt.md` test). The scorer also ran end to end on a synthetic run directory.
 
-### 2.2 Experiments (each answers one `d3` §11.4 question)
-| # | Experiment | Question it answers | GPU |
-|---|---|---|---|
-| T3.0 | **Token-length study** (Gemma tokenizer): teacher prompt + report + expected output vs `max_model_len` / KV; student prompt + report + target vs ~4,700 | "Is sequence length the blocker?" Decide this first; it's cheap | 0 |
-| T3.1 | CT taxonomy (~30–40 labels) + normalcy + study-type string, **provisional**. Seed from the chest X-ray labels that carry over (consolidation, effusion, nodule, cardiomegaly…) plus CT-specific ones (ground-glass, emphysema, bronchiectasis, mosaic attenuation, coronary calcification, lymphadenopathy…), and map to CT-RATE's own abnormality classes where possible. **Record how many labels overlap the chest taxonomy**: it becomes a variable in the portability story | 0 |
-| T3.2 | Teacher capacity probe: 256 longest + 1,000 random, W0-1c contract | CT outputs will be longer (more findings per report); expect at-cap > 1% at 2,048. If so: cap 3,072 + re-derived `max_model_len`, rerun **only** the probe, and record it. Never edit a gate after a result | ~1 h |
-| T3.3 | Teacher labeling: ~8–10k unique train reports (patient-disjoint, official train split) + the official validation split; T=0.1 replica on 1,000 test reports | Builds the reference | ~3–5 h wall on 2 GPUs (verify the rate in T3.2) |
-| T3.4 | **Zero-shot**: T1.4 s17 (and T2.3 if ready) with the CT list; base E4B; lexical floor; teacher replica as ceiling | "Does the radiograph adapter transfer across modality?" Strongest possible N1 result if yes | ~1–2 h |
-| T3.5 | **CT LoRA, cold vs warm start**, at **2k and ~8k** train reports: (a) from base E4B, (b) continued from T1.4 s17 | "Does radiograph distillation buy sample efficiency on a new modality?" A 2×2 that publishes well whatever the outcome, and it is the honest version of "needs a separate adapter" | 4 runs, ~2–6 h each |
-| T3.6 | External agreement: teacher and student vs **CT-RATE's provided labels** on the overlapping classes; RadGraph-XL entity-level grounding if PhysioNet lands | Agreement with an **external labeler**, not accuracy (CT-RATE's labels are themselves model-derived; verify) | 0–1 h |
-
-`d3` §11.4 says separate adapter, not joint, for CT. Keep that: **no CT data enters the
-chest/radiograph adapter in this window.** "Not yet" stays a permitted conclusion at every step.
+| File | Change |
+|---|---|
+| `scripts/tier1_external_score.py` | **Gate.** Pooled location F1 (limited) over effusion, pneumothorax and consolidation; pooled binary severity over those three plus cardiomegaly; flips as `k/n = %`; and `gate_reading` applies D55's thresholds mechanically (`clear` / `caveat` / `stop` / `undetermined`) for teacher and student. **Presence flags:** >10pp below MAPLEZ NIH, and paired Δ within ±2pp with CI ∋ 0. **Disagreements:** for each clean category, the mapped-label status on misses (Uncertain / Absent / not emitted), the other v3 labels asserted on misses, the gold code on false positives (explicit 0 vs not mentioned), and the other gold categories on those rows. Label names and counts only; unlisted findings are counted, never named. `scores.md` now opens with the gate table and carries n, gold+, excluded, invalid and invalid-as-negative in every row. No NaN in the JSON |
+| `scripts/tier1_external_eval.py` | `--run-name` (separate run namespace). `generate --reuse-from <run>` takes over an earlier run's rows when the contract is identical and the rendered prompt is byte-identical, so the MIMIC top-up generates about 136 rows, not 4,477. Provenance goes in `run.json`. `prompt-check` proves a model's system prompt appears verbatim in an earlier run's rendered prompts. The PhysioNet fallback uses v3's `combined_clean` (finding 8) and records `from_physionet_v3_would_escalate` |
+| `src/radx/v3bridge.py` | `combined_clean_text(raw)`: v3's tier-1/2 section parse, returning `(text, needs_llm)` |
+| `scripts/score_v2.py` | Adds `M2_macro_f1_support_ge_10` (label set fixed once, to labels with ≥10 reference positives) and its CI. The old M2 is unchanged, so earlier numbers stay comparable |
+| `scripts/build_tier1_freeze.py` (new) | Writes `manifests/v2_tier1_freeze.json` like `v1_freeze.json`. Frozen adapter = `t1_4_s17` by rule, `t1_4_s23` replicate. Every glob must match or it refuses. `--e5-run-dir` checks that E5's student used the frozen adapter fingerprint |
+| `gpufleet-e5-r3-mimic350.yml` (new) | R3: prepare with PhysioNet + both prompt pins, generate with `--reuse-from e5_external_eval_r2`, score, fidelity |
+| `docs/DECISIONS.md` | **D55**: the E5 gate, thresholds unchanged from #14, recorded after R2 with an honesty note |
+| `tests/` | 9 new tests: gate edges, pooling and patient clustering, disagreement privacy, presence flags, reuse (only byte-identical rows reused; resubmission keeps provenance; a different contract is refused), prompt-check (whitespace-trimmed template passes, a one-character change fails), student prompt = frozen P-split-B corpus hash, support-filtered M2 |
 
 ---
 
-## 3. Tier 1 items that must still finish (from #11)
+## 3. Next steps
 
-These are in the board below and aren't optional. Tier 2/3 numbers are meaningless without the
-fixed scorer, and the paper needs the controls.
+Run everything from the repo root on the server after `git pull`, with
+`PY=.venv/bin/python; export PYTHONPATH=src`. **(verify)** marks paths I can't see from the mirror.
 
-- **P0 (CPU):** M5 diagnosis with the v2 teacher's own M5; M2 decomposition + label hygiene;
-  anatomy metrics via `evaluate_transfer`; M12 fixed; CIs everywhere; same-function ceilings;
-  scorer + tests committed; train/test exact-text overlap.
-- **P1 (GPU):** `3.45k-nt` (trace confound), T1.3 s23, M8 warm benchmark, IU/Open-i replication.
-- **Deferred:** P-split-C side arm, N2/E2.4–E2.6, LOAO (LOAO only if a GPU is idle; it is the
-  best paper experiment among the deferred ones).
+### CPU, today (no GPU, minutes each)
+
+**C1. Read the gate on R2 (n = 214).**
+
+First add one sentence to D55's honesty note: had anyone looked at the location columns of R2's
+`scores.md` before this commit? (yes / no). Then:
+
+```bash
+$PY scripts/tier1_external_score.py --run-dir data/runs/e5_external_eval_r2 \
+    --out data/results/e5_external_eval_r2/scores_v16.json
+$PY scripts/score_v2.py --id-column external_id \
+    --reference data/predictions/e5_external_eval_r2/teacher.parquet \
+    --prediction data/predictions/e5_external_eval_r2/student.parquet \
+    --head-labels configs/locked/head_labels.yaml \
+    --reports data/runs/e5_external_eval_r2/inputs.parquet --patient-column patient_id \
+    --out data/results/e5_external_eval_r2/student_vs_teacher_v16.json
+```
+
+Expected: the first table of `scores_v16.md` is the gate, with a reading for teacher and student.
+The presence numbers must equal the R2 readout's exactly; nothing else in the scoring changed.
+If any presence cell moves, stop and report it.
+
+**C2. Prompt byte-identity.**
+
+```bash
+# teacher vs T1.2: any parquet holding T1.2's chat-templated teacher prompts  (verify path + column)
+$PY scripts/tier1_external_eval.py --run-name e5_external_eval_r2 prompt-check --model teacher \
+    --reference data/runs/t1_2/<t1_2 prompts>.parquet --column <rendered prompt column>
+# student vs T1.5: the Tier-1 P-split-B test corpus T1.5 scored  (verify path)
+$PY scripts/tier1_external_eval.py --run-name e5_external_eval_r2 prompt-check --model student \
+    --reference <tier-1 P-split-B test corpus>.parquet --column prompt_text
+```
+
+Each must print `"byte_identical": true`. If T1.2 kept no rendered prompts, give its run record's
+system-prompt hash instead; it must equal `f62e1c24341877f72ece5a99d3213d06c82017ae4c5056731be928341ca40b3a`.
+
+**C3. Fetch the 136 MIMIC reports** (credentialed PhysioNet account, under the existing DUA):
+
+```bash
+mkdir -p data/external/mimic-cxr-reports && cd data/external/mimic-cxr-reports
+wget --user <physionet user> --ask-password \
+    https://physionet.org/files/mimic-cxr/2.0.0/mimic-cxr-reports.zip   # the version your DUA lists
+unzip -q mimic-cxr-reports.zip && ls files | head   # expect p10 … p19
+cd -
+```
+
+It stays under `data/`. If the DUA or network rules this out, record **D56: MAPLEZ-MIMIC
+n = 214 accepted** (with the reason) and skip G1.
+
+**C4. Publish the E5 readout v2.**
+
+Replace or extend `docs/tier1/2026-10-14_e5_r2_aggregate_results.md` with:
+- the gate table and its reading;
+- the full presence table (n, gold+, excluded, invalid, invalid-as-negative);
+- the location/severity table per dataset;
+- the presence flags;
+- the consolidation disagreement summary;
+- M2 support ≥ 10 with its CI, plus the M2 caveat;
+- the C2 result.
+
+Rules: aggregates only, and wording per #14 §6 ("agreement with MAPLEZ human annotations", never
+"accuracy"). If G1 runs, the gate is read on n = 350, with n = 214 beside it.
+
+**C5. Tier-1 closeout status.** Send one line per #13 item 1–9: done (path or commit) / not done.
+The mirror shows **no** `manifests/v2_tier1_freeze.json`, **no** DECISIONS entries after D54 for
+#13 §4's four decisions, **no** `docs/tier1/results_tier_1.md`, and no `3.45k-nt` / T1.3 s23
+config or result. If those exist on the server, push the aggregates.
+
+**C6. Freeze manifest** (only after the #13 §4 decisions are recorded):
+
+```bash
+$PY scripts/build_tier1_freeze.py \
+    --corpus '<t1_3 corpus glob>' --corpus '<t1_4 corpus glob>' \
+    --eval-report 'reports/eval/t1_5_*' \
+    --e5-run-dir data/runs/e5_external_eval_r2        # (verify globs)
+```
+
+Commit `manifests/v2_tier1_freeze.json`. It holds paths and hashes only.
+
+### GPU
+
+| # | Job | Needs first | Size | Reads against |
+|---|---|---|---|---|
+| **G1** | `gpufleet-e5-r3-mimic350.yml`: E5 on the 350 MAPLEZ-MIMIC studies, reusing R2 rows | C2 pass, C3 | 1 GPU, about 20–30 min (mostly 31B load); `max_train_hrs: 1` | `prepare` prints `unavailable_rows: 0` (or what PhysioNet lacks); each `generate` prints `rows_left` ≈ 136. Then C1/C4 on `e5_external_eval_r3` |
+| G2 | `3.45k-nt` and T1.3 s23 (#13 item 4), **if not already run** | C5 says not done | 2 GPUs × ~10 h | #13 §2–3: M2 decomposition, schema-cost attribution |
+| G3 | M10 adversarial suite on `t1_4_s17` (#13, optional) | none | short teacher + student pass | "not measured" otherwise |
+| G4 | Tier-2 **generation only**: T2.1a capacity probe → T2.1 teacher (2 shards) → T2.2 zero-shot (#12 §1.3) | `configs/taxonomies/mammography.yaml` and the readings A/B entry in DECISIONS (T2.0). **Neither exists in the mirror** | 15 min; ~1 h on 2 GPUs; ~1 h | #12 gates. Generate now, read only after the Tier-2 gate |
+| — | **T2.3 joint training** | §4 below | 2 × ~15 h | — |
+
+### Owner
+
+- **O1.** Rewrite history (#15 §1). Use `git filter-repo` to drop `data/`, `advisor/` and the
+  `v3/` non-source files from every branch, then force-push. Until then, nobody fetches this
+  remote onto a new machine.
+- **O2.** Record #13 §4's four decisions:
+  1. one joint adapter;
+  2. frozen = `t1_4_s17` by rule;
+  3. schema v2 adopt / adopt with recorded costs / narrow, per #13 §4.3's pre-written rule;
+  4. production arm P-split-B.
+- **O3.** Mammography taxonomy and the readings A/B (T2.0) with the clinician; this unblocks G4.
+- **O4.** D56, if C3 is not possible.
 
 ---
 
-## 4. Board (4× H100)
+## 4. Tier-2 joint training (T2.3) starts when all of these hold
 
-| Day | GPU 1 | GPU 2 | GPU 3 | GPU 4 | CPU / people |
-|---|---|---|---|---|---|
-| **10-13 Tue** | `3.45k-nt` (~10 h) | T1.3 s23 (~10 h) | M8 benchmark → IU/Open-i replication | T2.1a mammo probe (as soon as the taxonomy is in) | **v2 scorer fixes + tests**; mammo taxonomy + readings A/B + split; DECISIONS (Tier-2 comparator, mammo normalcy mapping, CT-RATE licence, T2/T3 gates); legal + clinician + ethics requests out |
-| **10-14 Wed** | → free | → free | T2.1 shard 0 → T2.2 zero-shot | T2.1 shard 1 → T=0.1 replica | P0 readout (M5, M2, anatomy, M12, CIs); score T2.2; CT data ingest + T3.0 lengths |
-| **10-15 Thu** | **T2.3 s17** (~15 h), only if the T2.3 gate passes | **T2.3 s23** | T3.2 CT capacity probe | T3.1 taxonomy review / T3.3 starts if T3.2 passes | CT taxonomy; Tier-1 readout draft |
-| **10-16 Fri** | T2.3 → T2.4 eval | T2.3 → T2.4 eval | T3.3 CT teacher shard 0 | T3.3 shard 1 + replica | |
-| **10-19 Mon** | T2.4 scoring passes (chest, 4 anatomies, mammo; both seeds) | T2.3b mammo-only *(opt.)* | **T3.4** CT zero-shot | T3.5 cold 2k | T2.4 readout |
-| **10-20 Tue** | LOAO *(if idle)* | | T3.5 warm 2k → cold 8k | T3.5 warm 8k | T3.6 external agreement |
-| **10-21 → 10-23** | buffer / reruns | | T3 scoring | | Tier-2 + Tier-3 readouts |
-| **10-26 →** | — | | | | consolidated claims doc → paper outline |
+1. **E5 gate** (D55) reads `clear` or `caveat` on MAPLEZ-MIMIC, at n = 350 if G1 ran. If it reads
+   `stop`, Tier 2 does not train on location. The owner picks between a location re-label and
+   dropping location from the loss.
+2. If the consolidation breakdown shows the gap is a teacher error rather than a definition
+   difference, the owner records how Tier 2 handles it.
+3. #13 items 7 and 8 are done: the four decisions are recorded and the freeze manifest is committed.
+   Items 2–6 are reported as done or explicitly deferred.
+4. T2.1 has passed its merge gate and T2.2 has been scored (#12 §1.3).
 
-Estimates come from measured rates (teacher ~1.45 rows/s/GPU on radiographs, training ~25 s/step).
-CT rates are unknown until T3.2. This project's estimates have always run long, so the buffer
-is real.
-
----
+Expected path if nothing surprises: C1–C4 today, G1 tomorrow morning, the gate read the same day.
+Closeout (O2, C6) and T2.0 decide the actual start date of T2.3, not E5.
 
 ## 5. What to send back
 
-1. 10-14: scorer committed (test list from #11 §3.1), P0 readout, mammo taxonomy + DECISIONS numbers.
-2. After T2.1/T2.2 and T3.2: the self-describing aggregates (#07 §0.1 item 5), each against its
-   pre-written gate.
-3. Human and legal status every readout: clinician (mammo + 4 anatomies), legal (CT-RATE,
-   Gemma output terms), ethics/IRB, PhysioNet. Include "not started" when that's the truth.
+1. The C1 gate table (teacher and student) and the presence-equality check. If G1 has run, both n.
+2. The C2 results, as two JSON lines.
+3. The consolidation disagreement summary for teacher and student, counts only.
+4. C5's 9-line closeout status, and the status of O1–O3, including "not started" where that's true.
